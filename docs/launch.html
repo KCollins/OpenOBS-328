@@ -19,7 +19,6 @@
     .sensor-badge { background: #e2e3e5; color: #383d41; border: 1px solid #d6d8db; }
     .synced { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
     .time-banner { background: #e7f1ff; color: #084298; border: 1px solid #b6d4fe; padding: 10px 14px; border-radius: 6px; font-weight: bold; font-size: 15px; margin-bottom: 15px; display: flex; justify-content: space-between; }
-    .batt-banner { background: #fff3cd; color: #664d03; border: 1px solid #ffecb5; padding: 10px 14px; border-radius: 6px; font-weight: bold; font-size: 14px; margin-bottom: 15px; }
     .chart-box { height: 350px; background: white; padding: 15px; border-radius: 8px; border: 1px solid #dee2e6; margin-bottom: 15px; }
     #terminal { background: #1e1e1e; color: #00ff66; font-family: monospace; padding: 12px; height: 130px; overflow-y: auto; border-radius: 6px; font-size: 12px; }
     .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
@@ -56,7 +55,7 @@
 
       <div class="field-group" id="fastCadenceGroup">
         <label for="cadenceSelect">Sampling Cadence</label>
-        <select id="cadenceSelect" onchange="calculateBatteryLife()">
+        <select id="cadenceSelect">
           <option value="100" selected>100 ms (10 Hz)</option>
           <option value="200">200 ms (5 Hz)</option>
           <option value="500">500 ms (2 Hz)</option>
@@ -68,30 +67,14 @@
 
       <div class="field-group" id="sleepIntervalGroup" style="display: none;">
         <label for="hmsInput">Sample Interval [HH:mm:ss]</label>
-        <input type="text" id="hmsInput" value="00:15:00" placeholder="00:15:00" oninput="calculateBatteryLife()">
+        <input type="text" id="hmsInput" value="00:15:00" placeholder="00:15:00">
       </div>
 
       <div class="field-group">
         <label for="ledSelect">IR LED Current</label>
-        <select id="ledSelect" onchange="calculateBatteryLife()">
-          <option value="10">10 mA</option>
-          <option value="20">20 mA</option>
-          <option value="40">40 mA</option>
-          <option value="50" selected>50 mA (Default)</option>
-          <option value="70">70 mA</option>
-          <option value="100">100 mA</option>
-          <option value="140">140 mA</option>
-          <option value="180">180 mA</option>
-          <option value="200">200 mA</option>
-        </select>
-      </div>
-
-      <div class="field-group">
-        <label for="batterySelect">Battery Configuration</label>
-        <select id="batterySelect" onchange="calculateBatteryLife()">
-          <option value="2000" selected>2000 mAh Li-SOCl2 (Primary)</option>
-          <option value="2600">2600 mAh 18650 Li-ion</option>
-          <option value="3000">3000 mAh 3x AA Alkaline</option>
+        <select id="ledSelect">
+          <!-- Dynamic options populated upon sensor detection -->
+          <option value="50" selected>50 mA (Default - Awaiting Sensor)</option>
         </select>
       </div>
 
@@ -110,10 +93,6 @@
         <input type="datetime-local" id="delayedPicker">
       </div>
     </div>
-  </div>
-
-  <div class="batt-banner">
-    Est. Battery Life: <span id="battLifeDisplay">Calculating...</span>
   </div>
 
   <div class="time-banner">
@@ -187,7 +166,6 @@
         document.getElementById('fastCadenceGroup').style.display = 'flex';
         document.getElementById('sleepIntervalGroup').style.display = 'none';
       }
-      calculateBatteryLife();
     }
 
     function toggleDelayedStartUI() {
@@ -195,45 +173,40 @@
       document.getElementById('delayedStartGroup').style.display = checked ? 'flex' : 'none';
     }
 
+    function updateLedOptions(model) {
+      const ledSelect = document.getElementById('ledSelect');
+      const prevVal = parseInt(ledSelect.value, 10);
+      ledSelect.innerHTML = '';
+
+      let options = [];
+      if (model === "VCNL4030" || model === "VCNL4040") {
+        options = [50, 70, 100, 120, 140, 160, 180, 200];
+      } else if (model === "VCNL4010" || model === "VCNL4020") {
+        options = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200];
+      } else {
+        options = [10, 20, 40, 50, 70, 100, 140, 180, 200];
+      }
+
+      options.forEach(mA => {
+        const opt = document.createElement('option');
+        opt.value = mA;
+        opt.textContent = `${mA} mA${mA === 50 ? ' (Default)' : ''}`;
+        ledSelect.appendChild(opt);
+      });
+
+      if (options.includes(prevVal)) {
+        ledSelect.value = prevVal;
+      } else {
+        ledSelect.value = 50;
+      }
+    }
+
     function parseHmsToSeconds(hmsStr) {
       const parts = hmsStr.split(':').map(p => parseInt(p, 10));
       if (parts.length === 3 && !parts.some(isNaN)) {
         return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
       }
-      return 900; // Default 15 minutes
-    }
-
-    function calculateBatteryLife() {
-      const mode = document.getElementById('modeSelect').value;
-      const battMah = parseFloat(document.getElementById('batterySelect').value);
-      const ledMa = parseFloat(document.getElementById('ledSelect').value);
-
-      let intervalSec = 0.1;
-      if (mode === 'sleep') {
-        intervalSec = parseHmsToSeconds(document.getElementById('hmsInput').value);
-        if (intervalSec < 1) intervalSec = 1;
-      } else {
-        intervalSec = parseFloat(document.getElementById('cadenceSelect').value) / 1000.0;
-      }
-
-      const sleepCurrentMa = 0.020; // ~20 uA sleep current
-      const activeCurrentMa = 12.0 + ledMa; // Base ATmega328P (~12mA) + LED
-      const activeDurationSec = 0.025; // 25ms measurement pulse
-
-      const activeEnergyPerSample = (activeCurrentMa * activeDurationSec) / 3600.0; // mAh
-      const sleepEnergyPerSample = (sleepCurrentMa * (intervalSec - activeDurationSec)) / 3600.0; // mAh
-      const mahPerSample = activeEnergyPerSample + sleepEnergyPerSample;
-
-      const samplesPerDay = 86400 / intervalSec;
-      const mahPerDay = mahPerSample * samplesPerDay;
-
-      const days = battMah / mahPerDay;
-
-      if (days > 365) {
-        document.getElementById('battLifeDisplay').innerText = `${(days / 365.25).toFixed(1)} years (${days.toFixed(0)} days)`;
-      } else {
-        document.getElementById('battLifeDisplay').innerText = `${days.toFixed(1)} days`;
-      }
+      return 900;
     }
 
     async function toggleConnection() {
@@ -293,6 +266,7 @@
           sensorModel = parts[1];
           document.getElementById('sensorBadge').innerText = `Sensor: ${sensorModel}`;
           chart.data.datasets[1].label = (sensorModel === "VCNL4010" || sensorModel === "VCNL4020") ? "Ambient Light" : "Lux";
+          updateLedOptions(sensorModel);
         }
         logTerminal(`Board Info -> SN: ${serialNumber}, Sensor: ${sensorModel}`);
         return;
@@ -313,6 +287,7 @@
         if (parts.length > 2) {
           sensorModel = parts[2];
           document.getElementById('sensorBadge').innerText = `Sensor: ${sensorModel}`;
+          updateLedOptions(sensorModel);
         }
 
         activeStartEpoch = epoch;
@@ -448,7 +423,6 @@
       term.scrollTop = term.scrollHeight;
     }
 
-    // Initialize UI on page load
     updateModeUI();
   </script>
 </body>
