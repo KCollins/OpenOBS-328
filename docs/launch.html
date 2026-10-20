@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>OpenOBS Universal Sensor Deployment Tool</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; max-width: 980px; background: #f8f9fa; }
+    .config-card { background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 16px; margin-bottom: 15px; }
+    .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
+    .field-group { display: flex; flex-direction: column; gap: 4px; }
+    label { font-weight: bold; font-size: 13px; color: #495057; }
+    input, select { padding: 8px 12px; font-size: 14px; border: 1px solid #ced4da; border-radius: 5px; }
+    .status-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+    button { padding: 10px 16px; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 5px; border: 1px solid #ccc; }
+    #syncBtn { background: #28a745; color: white; border: none; }
+    #syncBtn:disabled { background: #ccc; cursor: not-allowed; }
+    .badge { padding: 8px 14px; border-radius: 5px; font-weight: bold; background: #e9ecef; font-size: 13px; }
+    .sensor-badge { background: #e2e3e5; color: #383d41; border: 1px solid #d6d8db; }
+    .synced { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .time-banner { background: #e7f1ff; color: #084298; border: 1px solid #b6d4fe; padding: 10px 14px; border-radius: 6px; font-weight: bold; font-size: 15px; margin-bottom: 15px; display: flex; justify-content: space-between; }
+    .batt-banner { background: #fff3cd; color: #664d03; border: 1px solid #ffecb5; padding: 10px 14px; border-radius: 6px; font-weight: bold; font-size: 14px; margin-bottom: 15px; }
+    .chart-box { height: 350px; background: white; padding: 15px; border-radius: 8px; border: 1px solid #dee2e6; margin-bottom: 15px; }
+    #terminal { background: #1e1e1e; color: #00ff66; font-family: monospace; padding: 12px; height: 130px; overflow-y: auto; border-radius: 6px; font-size: 12px; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+
+  <h2>OpenOBS Universal Sensor Deployment Tool</h2>
+
+  <div class="status-bar">
+    <button id="connectBtn" onclick="toggleConnection()">1. Connect Serial</button>
+    <button id="syncBtn" onclick="syncTime()" disabled>2. Sync Time & Start Log File</button>
+    <span id="snBadge" class="badge">SN: Unknown</span>
+    <span id="sensorBadge" class="badge sensor-badge">Sensor: Detecting...</span>
+    <span id="fileBadge" class="badge">File: Not Created</span>
+  </div>
+
+  <div class="config-card">
+    <div style="font-weight: bold; font-size: 15px; color: #212529;">Deployment Configuration</div>
+    <div class="config-grid">
+      
+      <div class="field-group">
+        <label for="notesInput">Deployment Notes</label>
+        <input type="text" id="notesInput" placeholder="e.g. Site A - Turbidity Trial 1" maxlength="75">
+      </div>
+
+      <div class="field-group">
+        <label for="modeSelect">Interval Mode</label>
+        <select id="modeSelect" onchange="updateModeUI()">
+          <option value="fast" selected>Continuous Fast Mode (sub-second)</option>
+          <option value="sleep">Low-Power Sleep Deployment (HH:MM:SS)</option>
+        </select>
+      </div>
+
+      <div class="field-group" id="fastCadenceGroup">
+        <label for="cadenceSelect">Sampling Cadence</label>
+        <select id="cadenceSelect" onchange="calculateBatteryLife()">
+          <option value="100" selected>100 ms (10 Hz)</option>
+          <option value="200">200 ms (5 Hz)</option>
+          <option value="500">500 ms (2 Hz)</option>
+          <option value="1000">1000 ms (1 Hz)</option>
+          <option value="2000">2000 ms (0.5 Hz)</option>
+          <option value="5000">5000 ms (0.2 Hz)</option>
+        </select>
+      </div>
+
+      <div class="field-group" id="sleepIntervalGroup" style="display: none;">
+        <label for="hmsInput">Sample Interval [HH:mm:ss]</label>
+        <input type="text" id="hmsInput" value="00:15:00" placeholder="00:15:00" oninput="calculateBatteryLife()">
+      </div>
+
+      <div class="field-group">
+        <label for="ledSelect">IR LED Current</label>
+        <select id="ledSelect" onchange="calculateBatteryLife()">
+          <option value="10">10 mA</option>
+          <option value="20">20 mA</option>
+          <option value="40">40 mA</option>
+          <option value="50" selected>50 mA (Default)</option>
+          <option value="70">70 mA</option>
+          <option value="100">100 mA</option>
+          <option value="140">140 mA</option>
+          <option value="180">180 mA</option>
+          <option value="200">200 mA</option>
+        </select>
+      </div>
+
+      <div class="field-group">
+        <label for="batterySelect">Battery Configuration</label>
+        <select id="batterySelect" onchange="calculateBatteryLife()">
+          <option value="2000" selected>2000 mAh Li-SOCl2 (Primary)</option>
+          <option value="2600">2600 mAh 18650 Li-ion</option>
+          <option value="3000">3000 mAh 3x AA Alkaline</option>
+        </select>
+      </div>
+
+    </div>
+
+    <div class="config-grid" style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 10px;">
+      <div class="field-group">
+        <div class="checkbox-row">
+          <input type="checkbox" id="delayedStartCheck" onchange="toggleDelayedStartUI()">
+          <label for="delayedStartCheck">Enable Delayed Start</label>
+        </div>
+      </div>
+
+      <div class="field-group" id="delayedStartGroup" style="display: none;">
+        <label for="delayedPicker">Start Time (Local Browser Time)</label>
+        <input type="datetime-local" id="delayedPicker">
+      </div>
+    </div>
+  </div>
+
+  <div class="batt-banner">
+    Est. Battery Life: <span id="battLifeDisplay">Calculating...</span>
+  </div>
+
+  <div class="time-banner">
+    <span id="humanTimeDisplay">System Time Status: Unsynced</span>
+    <span id="epochDisplay">UTC Epoch: 0</span>
+  </div>
+
+  <div class="chart-box">
+    <canvas id="sensorChart"></canvas>
+  </div>
+
+  <h3>Serial Log</h3>
+  <div id="terminal">Click "Connect Serial" to pair with OpenOBS logger board...</div>
+
+  <script>
+    let port, reader, isConnected = false;
+    let serialNumber = "Unknown";
+    let sensorModel = "Unknown";
+    let activeStartEpoch = 0;
+    let syncTimeLocal = 0;
+    let clockInterval = null;
+
+    const ctx = document.getElementById('sensorChart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'Proximity',
+            data: [],
+            borderColor: '#dc3545',
+            backgroundColor: '#dc3545',
+            yAxisID: 'yProx',
+            borderWidth: 2,
+            pointRadius: 2,
+            tension: 0.2,
+            fill: false
+          },
+          {
+            label: 'Light / Lux',
+            data: [],
+            borderColor: '#0d6efd',
+            backgroundColor: '#0d6efd',
+            yAxisID: 'yLight',
+            borderWidth: 2,
+            pointRadius: 2,
+            tension: 0.2,
+            fill: false
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+          x: { display: true, title: { display: true, text: 'Time (UTC)' } },
+          yProx: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Proximity (Counts)' }, suggestedMin: 0 },
+          yLight: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'Light Level / Lux' }, grid: { drawOnChartArea: false }, suggestedMin: 0 }
+        }
+      }
+    });
+
+    function updateModeUI() {
+      const mode = document.getElementById('modeSelect').value;
+      if (mode === 'sleep') {
+        document.getElementById('fastCadenceGroup').style.display = 'none';
+        document.getElementById('sleepIntervalGroup').style.display = 'flex';
+      } else {
+        document.getElementById('fastCadenceGroup').style.display = 'flex';
+        document.getElementById('sleepIntervalGroup').style.display = 'none';
+      }
+      calculateBatteryLife();
+    }
+
+    function toggleDelayedStartUI() {
+      const checked = document.getElementById('delayedStartCheck').checked;
+      document.getElementById('delayedStartGroup').style.display = checked ? 'flex' : 'none';
+    }
+
+    function parseHmsToSeconds(hmsStr) {
+      const parts = hmsStr.split(':').map(p => parseInt(p, 10));
+      if (parts.length === 3 && !parts.some(isNaN)) {
+        return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+      }
+      return 900; // Default 15 minutes
+    }
+
+    function calculateBatteryLife() {
+      const mode = document.getElementById('modeSelect').value;
+      const battMah = parseFloat(document.getElementById('batterySelect').value);
+      const ledMa = parseFloat(document.getElementById('ledSelect').value);
+
+      let intervalSec = 0.1;
+      if (mode === 'sleep') {
+        intervalSec = parseHmsToSeconds(document.getElementById('hmsInput').value);
+        if (intervalSec < 1) intervalSec = 1;
+      } else {
+        intervalSec = parseFloat(document.getElementById('cadenceSelect').value) / 1000.0;
+      }
+
+      const sleepCurrentMa = 0.020; // ~20 uA sleep current
+      const activeCurrentMa = 12.0 + ledMa; // Base ATmega328P (~12mA) + LED
+      const activeDurationSec = 0.025; // 25ms measurement pulse
+
+      const activeEnergyPerSample = (activeCurrentMa * activeDurationSec) / 3600.0; // mAh
+      const sleepEnergyPerSample = (sleepCurrentMa * (intervalSec - activeDurationSec)) / 3600.0; // mAh
+      const mahPerSample = activeEnergyPerSample + sleepEnergyPerSample;
+
+      const samplesPerDay = 86400 / intervalSec;
+      const mahPerDay = mahPerSample * samplesPerDay;
+
+      const days = battMah / mahPerDay;
+
+      if (days > 365) {
+        document.getElementById('battLifeDisplay').innerText = `${(days / 365.25).toFixed(1)} years (${days.toFixed(0)} days)`;
+      } else {
+        document.getElementById('battLifeDisplay').innerText = `${days.toFixed(1)} days`;
+      }
+    }
+
+    async function toggleConnection() {
+      if (isConnected) { disconnect(); return; }
+
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 57600 });
+
+        isConnected = true;
+        document.getElementById('connectBtn').innerText = "Disconnect";
+        document.getElementById('syncBtn').disabled = false;
+        logTerminal("Serial port connected at 57600 baud. Waiting for board boot...");
+
+        readSerialLoop();
+
+        setTimeout(async () => {
+          if (serialNumber === "Unknown") {
+            await sendSerialCommand("GET_SN\n");
+          }
+        }, 1500);
+
+      } catch (err) {
+        logTerminal(`Connection Error: ${err.message}`);
+      }
+    }
+
+    async function readSerialLoop() {
+      const textDecoder = new TextDecoderStream();
+      port.readable.pipeTo(textDecoder.writable);
+      reader = textDecoder.readable.getReader();
+
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += value;
+        let lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (let line of lines) {
+          line = line.trim();
+          if (line.length > 0) processLine(line);
+        }
+      }
+    }
+
+    function processLine(line) {
+      if (line.startsWith("ACK_SN:")) {
+        const payload = line.substring(7);
+        const parts = payload.split(',');
+        serialNumber = parts[0];
+        document.getElementById('snBadge').innerText = `SN: ${serialNumber}`;
+
+        if (parts.length > 1) {
+          sensorModel = parts[1];
+          document.getElementById('sensorBadge').innerText = `Sensor: ${sensorModel}`;
+          chart.data.datasets[1].label = (sensorModel === "VCNL4010" || sensorModel === "VCNL4020") ? "Ambient Light" : "Lux";
+        }
+        logTerminal(`Board Info -> SN: ${serialNumber}, Sensor: ${sensorModel}`);
+        return;
+      }
+
+      if (line.startsWith("ACK_CFG:")) {
+        const parts = line.substring(8).split(',');
+        logTerminal(`Configuration Applied -> Interval: ${parts[0]}, LED Current: ${parts[1]} mA`);
+        return;
+      }
+
+      if (line.startsWith("ACK_SYNC:")) {
+        const payload = line.substring(9);
+        const parts = payload.split(',');
+        const epoch = parseInt(parts[0]);
+        const fileName = parts.length > 1 ? parts[1] : 'Active';
+
+        if (parts.length > 2) {
+          sensorModel = parts[2];
+          document.getElementById('sensorBadge').innerText = `Sensor: ${sensorModel}`;
+        }
+
+        activeStartEpoch = epoch;
+        syncTimeLocal = Date.now();
+
+        const fileBadge = document.getElementById('fileBadge');
+        fileBadge.innerText = `File: ${fileName}`;
+        fileBadge.classList.add('synced');
+
+        chart.data.labels = [];
+        chart.data.datasets[0].data = [];
+        chart.data.datasets[1].data = [];
+        chart.update('none');
+
+        startLiveClock();
+        logTerminal(`-> Board Synced (${epoch}). Created File: ${fileName}`);
+        return;
+      }
+
+      if (line.startsWith("MSG:")) {
+        logTerminal(line);
+        return;
+      }
+
+      const parts = line.split(',');
+      if (parts.length >= 5) {
+        const epoch = parseInt(parts[0]);
+        const prox = parseFloat(parts[3]);
+        const light = parseFloat(parts[4]);
+
+        if (!isNaN(prox) && !isNaN(light)) {
+          const timeLabel = epoch > 1000000000 
+            ? new Date(epoch * 1000).toLocaleTimeString('en-US', { timeZone: 'UTC' }) + ' UTC'
+            : 'Unsynced';
+
+          chart.data.labels.push(timeLabel);
+          chart.data.datasets[0].data.push(prox);
+          chart.data.datasets[1].data.push(light);
+
+          if (chart.data.labels.length > 40) {
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
+            chart.data.datasets[1].data.shift();
+          }
+
+          chart.update('none');
+        }
+      }
+    }
+
+    function startLiveClock() {
+      if (clockInterval) clearInterval(clockInterval);
+
+      function updateClock() {
+        const elapsedSec = Math.floor((Date.now() - syncTimeLocal) / 1000);
+        const currentEpoch = activeStartEpoch + elapsedSec;
+        const d = new Date(currentEpoch * 1000);
+
+        const utcDateStr = d.toLocaleString('en-US', {
+          timeZone: 'UTC',
+          dateStyle: 'full',
+          timeStyle: 'medium'
+        }) + ' UTC';
+
+        document.getElementById('humanTimeDisplay').innerHTML = `Synced UTC Time: <strong>${utcDateStr}</strong>`;
+        document.getElementById('epochDisplay').innerHTML = `UTC Epoch: <strong>${currentEpoch}</strong>`;
+      }
+
+      updateClock();
+      clockInterval = setInterval(updateClock, 1000);
+    }
+
+    async function syncTime() {
+      if (!port || !port.writable) return;
+
+      const mode = document.getElementById('modeSelect').value;
+      const notes = document.getElementById('notesInput').value.trim();
+      const ledCurrent = document.getElementById('ledSelect').value;
+      const epoch = Math.floor(Date.now() / 1000);
+
+      let intervalVal = 100;
+      let isSeconds = 0;
+
+      if (mode === 'sleep') {
+        intervalVal = parseHmsToSeconds(document.getElementById('hmsInput').value);
+        isSeconds = 1;
+      } else {
+        intervalVal = document.getElementById('cadenceSelect').value;
+        isSeconds = 0;
+      }
+
+      let delayedEpoch = 0;
+      if (document.getElementById('delayedStartCheck').checked) {
+        const delayedVal = document.getElementById('delayedPicker').value;
+        if (delayedVal) {
+          delayedEpoch = Math.floor(new Date(delayedVal).getTime() / 1000);
+        }
+      }
+
+      if (notes.length > 0) {
+        await sendSerialCommand(`NOTE:${notes}\n`);
+        await new Promise(r => setTimeout(r, 80));
+      }
+
+      await sendSerialCommand(`SET_CFG:${intervalVal},${isSeconds},${ledCurrent},${delayedEpoch}\n`);
+      await new Promise(r => setTimeout(r, 80));
+
+      await sendSerialCommand(`T${epoch}\n`);
+      logTerminal(`Sent Deployment Config & Sync Command to OpenOBS.`);
+    }
+
+    async function sendSerialCommand(cmd) {
+      if (!port || !port.writable) return;
+      const writer = port.writable.getWriter();
+      await writer.write(new TextEncoder().encode(cmd));
+      writer.releaseLock();
+    }
+
+    async function disconnect() {
+      if (reader) await reader.cancel();
+      if (port) await port.close();
+      if (clockInterval) clearInterval(clockInterval);
+
+      isConnected = false;
+      document.getElementById('connectBtn').innerText = "1. Connect Serial";
+      document.getElementById('syncBtn').disabled = true;
+      logTerminal("Disconnected.");
+    }
+
+    function logTerminal(msg) {
+      const term = document.getElementById('terminal');
+      term.innerHTML += `<div>${msg}</div>`;
+      term.scrollTop = term.scrollHeight;
+    }
+
+    // Initialize UI on page load
+    updateModeUI();
+  </script>
+</body>
+</html>
